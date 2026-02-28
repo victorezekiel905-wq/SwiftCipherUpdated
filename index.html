@@ -1147,15 +1147,28 @@ function getTransactions() {
         // isSuperAdmin() already defined above (Supabase role-based)
 
         
-        // ==================== PRICE SIMULATION (DISABLED - CHART FREEZE) ====================
+        // ==================== PRICE SIMULATION ====================
         function updatePrices() {
-            // CHART FREEZE: no live price simulation.
-            // Prices remain a static snapshot until manual page refresh.
-            return;
+            Object.keys(APP.prices).forEach(crypto => {
+                if (crypto === 'USDT') return; // USDT is stablecoin
+
+                const change = (Math.random() - 0.5) * 0.01; // ±0.5%
+                APP.prices[crypto] = APP.prices[crypto] * (1 + change);
+            });
+
+            // Update price displays
+            $$('[data-price]').forEach(el => {
+                const crypto = el.getAttribute('data-price');
+                if (APP.prices[crypto]) {
+                    el.textContent = formatCurrency(APP.prices[crypto]);
+                }
+            });
+
+            // NOTE: Trading chart movement is controlled by ONE trading interval only.
+            // (See app-features.js: startTrading/stopTrading)
         }
         
-        // CHART FREEZE: disable background price interval
-        // setInterval(updatePrices, 3000); // Update every 3 seconds
+        setInterval(updatePrices, 3000); // Update every 3 seconds
 
         function syncUserInvestmentWalletToStorage(userId) {
             // (Supabase mode) Intentionally no-op.
@@ -2095,19 +2108,9 @@ function getTransactions() {
                             <div style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
                                 <span style="font-weight: 700;">${crypto}</span>
                                 <span data-price="${crypto}">${formatCurrency(APP.prices[crypto])}</span>
-                                ${(() => {
-                                    // CHART FREEZE: deterministic (no random) snapshot ticker change
-                                    const u = (APP && APP.currentUser) ? APP.currentUser : {};
-                                    const seedStr = String(u.id || u.email || u.name || 'user') + ':' + crypto;
-                                    let seed = 0;
-                                    for (let k = 0; k < seedStr.length; k++) seed = (seed * 31 + seedStr.charCodeAt(k)) >>> 0;
-                                    const pct = ((seed % 500) / 100); // 0.00 - 4.99
-                                    const up = (seed % 2) === 0;
-                                    return `
-                                <span style="color: ${up ? 'var(--success)' : 'var(--danger)'}; font-size: 12px;">
-                                    ${up ? '▲' : '▼'} ${pct.toFixed(2)}%
-                                </span>`;
-                                })()}
+                                <span style="color: ${Math.random() > 0.5 ? 'var(--success)' : 'var(--danger)'}; font-size: 12px;">
+                                    ${Math.random() > 0.5 ? '▲' : '▼'} ${(Math.random() * 5).toFixed(2)}%
+                                </span>
                             </div>
                         `).join('')}
                     </div>
@@ -2131,12 +2134,7 @@ function getTransactions() {
                     <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 16px;">Market Snapshot</h3>
                     <div class="grid-responsive-3">
                         ${['BTC', 'ETH', 'BNB', 'SOL', 'ADA', 'USDT'].map(crypto => {
-                            // CHART FREEZE: deterministic (no random) snapshot market change
-                            const u = (APP && APP.currentUser) ? APP.currentUser : {};
-                            const seedStr = String(u.id || u.email || u.name || 'user') + ':market:' + crypto;
-                            let seed = 0;
-                            for (let k = 0; k < seedStr.length; k++) seed = (seed * 33 + seedStr.charCodeAt(k)) >>> 0;
-                            const change = ((seed % 2001) / 100) - 10; // -10.00% .. +10.00%
+                            const change = (Math.random() - 0.5) * 10;
                             const isPositive = change >= 0;
                             return `
                                 <div class="card" style="cursor: pointer;" onclick="navigate('#/exchange')">
@@ -2150,15 +2148,7 @@ function getTransactions() {
                                         </div>
                                     </div>
                                     <div style="font-size: 24px; font-weight: 800; margin-bottom: 4px;" data-price="${crypto}">${formatCurrency(APP.prices[crypto])}</div>
-                                    ${(() => {
-                                        // CHART FREEZE: deterministic (no random) snapshot volume
-                                        const u = (APP && APP.currentUser) ? APP.currentUser : {};
-                                        const seedStr = String(u.id || u.email || u.name || 'user') + ':vol:' + crypto;
-                                        let seed = 0;
-                                        for (let k = 0; k < seedStr.length; k++) seed = (seed * 37 + seedStr.charCodeAt(k)) >>> 0;
-                                        const vol = (seed % 1000000000);
-                                        return `<div style="font-size: 12px; color: var(--text-secondary);">24h Volume: ${formatCurrency(vol)}</div>`;
-                                    })()}
+                                    <div style="font-size: 12px; color: var(--text-secondary);">24h Volume: ${formatCurrency(Math.random() * 1000000000)}</div>
                                 </div>
                             `;
                         }).join('')}
@@ -2318,14 +2308,7 @@ function getTransactions() {
             
             for (let i = 29; i >= 0; i--) {
                 btcDays.push(new Date(Date.now() - i * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
-                // CHART FREEZE: deterministic (no random) snapshot series
-                const u = (APP && APP.currentUser) ? APP.currentUser : {};
-                const seedStr = String(u.id || u.email || u.name || 'user');
-                let seed = 0;
-                for (let k = 0; k < seedStr.length; k++) seed = (seed + seedStr.charCodeAt(k)) % 997;
-                const wave = Math.sin((29 - i + seed) * 0.35);
-                const factor = 1 + (wave * 0.06); // ±6%
-                btcPrices.push(basePrice * factor);
+                btcPrices.push(basePrice * (0.85 + Math.random() * 0.3));
             }
             
             const btcCtx = document.getElementById('btcPriceChart');
