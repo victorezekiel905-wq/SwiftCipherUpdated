@@ -519,44 +519,9 @@ function renderAdmin() {
         <h1 style="font-size: 32px; font-weight: 800; margin-bottom: 8px;">Admin Dashboard</h1>
         <p style="color: var(--text-secondary); font-size: 16px; margin-bottom: 32px;">Platform management and analytics</p>
         
-        <!-- Platform Stats -->
-        <div class="grid-responsive" style="margin-bottom: 32px;">
-            <div class="stat-card">
-                <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 8px;">Total Users</div>
-                <div style="font-size: 32px; font-weight: 800;">${totalUsers}</div>
-                <div style="font-size: 14px; color: var(--success); margin-top: 4px;">+12 this month</div>
-            </div>
-            <div class="stat-card">
-                <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 8px;">Active Investments</div>
-                <div style="font-size: 32px; font-weight: 800;">${formatCurrency(totalInvestments)}</div>
-            </div>
-            <div class="stat-card">
-                <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 8px;">Platform Revenue</div>
-                <div style="font-size: 32px; font-weight: 800; color: var(--success);">${formatCurrency(totalRevenue)}</div>
-            </div>
-            <div class="stat-card">
-                <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 8px;">Trading Volume</div>
-                <div style="font-size: 32px; font-weight: 800;">${formatCurrency(totalVolume)}</div>
-            </div>
-        </div>
-        
-        <div class="grid-responsive-2">
-            <!-- User Signups Chart -->
-            <div class="card">
-                <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">User Signups (Last 7 Days)</h3>
-                <canvas id="signupsChart" style="height: 250px;"></canvas>
-            </div>
-            
-            <!-- Revenue Chart -->
-            <div class="card">
-                <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">Revenue (Last 7 Days)</h3>
-                <canvas id="revenueChart" style="height: 250px;"></canvas>
-            </div>
-        </div>
-        
         ${typeof isSuperAdmin === 'function' && isSuperAdmin() ? `
         <!-- Pending Investment Payments -->
-        <div class="card" style="margin-top: 32px;">
+        <div class="card" style="margin-bottom: 32px;">
             <div style="display:flex; justify-content: space-between; align-items:center; margin-bottom: 16px;">
                 <h3 style="font-size: 20px; font-weight: 700;">Pending Investment Payments</h3>
                 <div class="badge badge-warning">Super Admin Only</div>
@@ -613,7 +578,7 @@ function renderAdmin() {
         ` : ''}
 
         <!-- Users Management -->
-        <div class="card" style="margin-top: 32px;">
+        <div class="card" style="margin-bottom: 32px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                 <h3 style="font-size: 20px; font-weight: 700;">Users Management</h3>
                 <input type="text" class="input" placeholder="🔍 Search users..." style="max-width: 300px;" id="userSearch" oninput="filterUsers()">
@@ -703,6 +668,40 @@ function renderAdmin() {
             </div>
         </div>
         
+        <!-- Platform Stats -->
+        <div class="grid-responsive" style="margin-bottom: 32px;">
+            <div class="stat-card">
+                <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 8px;">Total Users</div>
+                <div style="font-size: 32px; font-weight: 800;">${totalUsers}</div>
+                <div style="font-size: 14px; color: var(--success); margin-top: 4px;">+12 this month</div>
+            </div>
+            <div class="stat-card">
+                <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 8px;">Active Investments</div>
+                <div style="font-size: 32px; font-weight: 800;">${formatCurrency(totalInvestments)}</div>
+            </div>
+            <div class="stat-card">
+                <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 8px;">Platform Revenue</div>
+                <div style="font-size: 32px; font-weight: 800; color: var(--success);">${formatCurrency(totalRevenue)}</div>
+            </div>
+            <div class="stat-card">
+                <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 8px;">Trading Volume</div>
+                <div style="font-size: 32px; font-weight: 800;">${formatCurrency(totalVolume)}</div>
+            </div>
+        </div>
+        
+        <div class="grid-responsive-2">
+            <!-- User Signups Chart -->
+            <div class="card">
+                <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">User Signups (Last 7 Days)</h3>
+                <canvas id="signupsChart" style="height: 250px;"></canvas>
+            </div>
+            
+            <!-- Revenue Chart -->
+            <div class="card">
+                <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">Revenue (Last 7 Days)</h3>
+                <canvas id="revenueChart" style="height: 250px;"></canvas>
+            </div>
+        </div>
 
         <!-- Edit Balance Modal -->
         <div id="editBalanceModal" style="display: none;"></div>
@@ -712,39 +711,15 @@ function renderAdmin() {
 }
 
 function initAdminCharts() {
-    // CHART FREEZE: Admin charts are STATIC snapshots derived from Users table data.
-    // No Math.random(), no background updates.
-
-    const DAY_MS = 24 * 60 * 60 * 1000;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // Prefer Supabase users cache; fallback to local getUsers()
-    const sourceUsers = (window.__ADMIN_USERS_CACHE && Array.isArray(window.__ADMIN_USERS_CACHE) && window.__ADMIN_USERS_CACHE.length)
-        ? window.__ADMIN_USERS_CACHE
-        : ((typeof getUsers === 'function') ? getUsers() : []);
-
-    // ---------- Signups (last 7 days) ----------
+    // Signups Chart
     const signupDays = [];
     const signupCounts = [];
-
     for (let i = 6; i >= 0; i--) {
-        const d = new Date(today.getTime() - i * DAY_MS);
-        signupDays.push(d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
-
-        const start = d.getTime();
-        const end = start + DAY_MS;
-        let count = 0;
-
-        (sourceUsers || []).forEach(u => {
-            // Support multiple shapes: created_at (Supabase), createdAt (local)
-            const ts = (u && (u.created_at || u.createdAt)) ? new Date(u.created_at || u.createdAt).getTime() : 0;
-            if (ts >= start && ts < end) count++;
-        });
-
-        signupCounts.push(count);
+        const date = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+        signupDays.push(date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+        signupCounts.push(Math.floor(Math.random() * 10) + 5);
     }
-
+    
     const signupsCtx = document.getElementById('signupsChart');
     if (signupsCtx) {
         new Chart(signupsCtx, {
@@ -777,39 +752,16 @@ function initAdminCharts() {
             }
         });
     }
-
-    // ---------- Revenue (static proxy from user investment records; last 7 days) ----------
+    
+    // Revenue Chart
     const revenueDays = [];
     const revenueCounts = [];
-
     for (let i = 6; i >= 0; i--) {
-        const d = new Date(today.getTime() - i * DAY_MS);
-        revenueDays.push(d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
-
-        const start = d.getTime();
-        const end = start + DAY_MS;
-        let revenue = 0;
-
-        (sourceUsers || []).forEach(u => {
-            // Try to attribute revenue to user creation day (snapshot metric)
-            const ts = (u && (u.created_at || u.createdAt)) ? new Date(u.created_at || u.createdAt).getTime() : 0;
-            if (!(ts >= start && ts < end)) return;
-
-            // Support shapes:
-            // - Supabase: investment: { amount, profit }
-            // - Legacy/local: investmentWallet number
-            const inv = (u && u.investment) ? u.investment : null;
-            const amt = inv ? Number(inv.amount || 0) : 0;
-            const prof = inv ? Number(inv.profit || 0) : 0;
-            const legacy = Number(u && u.investmentWallet || 0);
-
-            revenue += (amt + prof);
-            if (!amt && !prof) revenue += legacy;
-        });
-
-        revenueCounts.push(revenue);
+        const date = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+        revenueDays.push(date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+        revenueCounts.push(Math.random() * 5000 + 2000);
     }
-
+    
     const revenueCtx = document.getElementById('revenueChart');
     if (revenueCtx) {
         new Chart(revenueCtx, {
