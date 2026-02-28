@@ -138,17 +138,19 @@ function userTradingIsActive() {
 }
 
 function updateChart() {
-    // CHART FREEZE: trading engine disabled permanently
-    // Intentionally empty to prevent any interval-driven chart movement.
-    tradingInterval = null;
-    return;
+    // Stop immediately if user no longer active
+    if (!userTradingIsActive()) {
+        stopTrading();
+        return;
+    }
+    updateTradingChart();
 }
 
 function startTrading() {
-    // CHART FREEZE: trading engine disabled permanently
-    // Ensure tradingInterval is never initialized.
-    tradingInterval = null;
-    return;
+    // Trading must ONLY start after admin confirmation (i.e., active investment exists)
+    if (!userTradingIsActive()) return;
+    if (tradingInterval) return;
+    tradingInterval = setInterval(updateChart, 2000);
 }
 
 function stopTrading() {
@@ -173,8 +175,8 @@ window.syncTradingState = syncTradingState;
 // TRADING PAGE
 function renderTrading() {
     ensureTradingDefaults();
-    // CHART FREEZE: trading engine disabled; no background sync timers
-    // setTimeout(syncTradingState, 50);
+    // Ensure interval state matches investment status
+    setTimeout(syncTradingState, 50);
     const user = APP.currentUser;
     const trades = getTrades().filter(t => t.userId === user.id);
     const openTrades = trades.filter(t => t.status === 'open');
@@ -541,29 +543,19 @@ function closeTrade(tradeId) {
 function initTradingCharts() {
     ensureTradingDefaults();
 
-    // Price chart (STATIC snapshot; deterministic; NO random movement)
+    // Price chart
     const days = [];
     const prices = [];
     const crypto = APP.tradingPair?.split('/')[0] || 'BTC';
     const basePrice = APP.prices[crypto];
 
-    // Keep last price per crypto (static snapshot baseline)
+    // Keep last price per crypto to prevent constant drift
     if (!APP.tradingLastPrice) APP.tradingLastPrice = {};
     APP.tradingLastPrice[crypto] = basePrice;
 
-    // Deterministic seed derived from the current user (Users table)
-    const u = (APP && APP.currentUser) ? APP.currentUser : {};
-    const seedStr = String(u.id || u.email || u.name || 'user');
-    let seed = 0;
-    for (let k = 0; k < seedStr.length; k++) seed = (seed + seedStr.charCodeAt(k)) % 997;
-
     for (let i = 23; i >= 0; i--) {
-        const idx = 23 - i;
         days.push(i + 'h');
-        // Small, deterministic wave around basePrice (never updates after render)
-        const wave = Math.sin((idx + seed) * 0.55);
-        const factor = 1 + (wave * 0.01); // ±1%
-        prices.push(basePrice * factor);
+        prices.push(basePrice * (0.98 + Math.random() * 0.04));
     }
 
     const ctx = document.getElementById('tradingPriceChart');
@@ -594,16 +586,52 @@ function initTradingCharts() {
         });
     }
 
-    // CHART FREEZE: trading engine disabled; no background sync timers
-    // setTimeout(syncTradingState, 50);
+    // Start/stop trading based on ACTIVE status (single interval)
+    setTimeout(syncTradingState, 50);
 }
 
-// ==================== CHART FREEZE: updateTradingChart is permanently frozen ====================
-// Candlesticks / chart ticks are 100% frozen - no movement allowed.
+// ==================== CHART FREEZE: updateTradingChart is intentionally blank ====================
+// Candlesticks are 100% frozen - no movement allowed.
 function updateTradingChart() {
-    // Render-only behavior: the chart is drawn once in initTradingCharts().
-    // No Math.random(), no new points, no shifting, no updates.
+    // FROZEN: no chart movement. DO NOT add any logic here.
     return;
+
+    // Dead code below kept only for reference - will never execute:
+    ensureTradingDefaults();
+    if (!APP.charts.tradingPrice) return;
+
+    const crypto = APP.tradingPair.split('/')[0];
+
+    if (!APP.tradingLastPrice) APP.tradingLastPrice = {};
+    const last = APP.tradingLastPrice[crypto] || APP.prices[crypto];
+    const base = APP.prices[crypto];
+
+    const volatility = 0.006;
+    const shock = (Math.random() - 0.5) * 2 * volatility;
+    const meanRevert = (base - last) * 0.02;
+
+    let next = last * (1 + shock) + meanRevert;
+    if (!isFinite(next) || next <= 0) next = Math.max(1, base);
+
+    APP.tradingLastPrice[crypto] = next;
+    APP.prices[crypto] = next;
+
+    // Update main price text (keeps UI consistent)
+    const priceEl = document.getElementById('tradingPrice');
+    if (priceEl) priceEl.textContent = formatCurrency(next);
+
+    // Simple change badge
+    const chEl = document.getElementById('tradingChange');
+    if (chEl) {
+        const pct = ((next - last) / last) * 100;
+        const up = pct >= 0;
+        chEl.className = 'badge ' + (up ? 'badge-success' : 'badge-danger');
+        chEl.textContent = (up ? '+' : '') + pct.toFixed(2) + '%';
+    }
+
+    APP.charts.tradingPrice.data.datasets[0].data.push(next);
+    APP.charts.tradingPrice.data.datasets[0].data.shift();
+    APP.charts.tradingPrice.update('none');
 }
 
 // REFERRAL PAGE
