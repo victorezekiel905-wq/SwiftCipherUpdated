@@ -19,6 +19,23 @@
     try {
       if (window.location.hash === '#/admin') {
         if (typeof render === 'function') render();
+        // Also refresh every 15 seconds while on admin page to pick up new pending investments
+        if (!window.__adminPollTimer) {
+          window.__adminPollTimer = setInterval(async function() {
+            if (window.location.hash !== '#/admin') {
+              clearInterval(window.__adminPollTimer);
+              window.__adminPollTimer = null;
+              return;
+            }
+            await loadAdminUsers();
+            // Only re-render pending section to avoid jarring full re-render
+            var pendingSection = document.querySelector('.admin-pending-refresh-target');
+            if (!pendingSection && typeof render === 'function') {
+              // Gentle full re-render if no target element found
+              render();
+            }
+          }, 15000);
+        }
       }
     } catch (e) {}
   };
