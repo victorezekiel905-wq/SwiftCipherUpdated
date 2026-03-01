@@ -145,7 +145,15 @@ function renderWallet() {
                         <div style="font-size: 32px; margin-bottom: 12px;">📈</div>
                         <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 8px;">Interest Earned</div>
                         <div style="font-size: 28px; font-weight: 800; color: var(--success);" id="walletInterestEarned">${formatCurrency(s.interestEarned)}</div>
-                        ${s.totalInvested > 0 ? `<div style="font-size:12px; margin-top:6px;"><span class="inv-engine-status" style="font-weight:700; color:${hasCompleted ? 'var(--success)' : 'var(--warning)'}">${hasCompleted ? '\u2705 Completed' : '\u23f3 In Progress'}</span></div>` : ''}
+                        ${s.totalInvested > 0 ? (() => {
+                            const dbSt = String(((APP.currentUser && APP.currentUser._dbInvestment) || {}).status || 'pending').toLowerCase();
+                            let statusLabel, statusColor;
+                            if (dbSt === 'completed' || hasCompleted) { statusLabel = '✅ Completed'; statusColor = 'var(--success)'; }
+                            else if (dbSt === 'approved' || dbSt === 'active' || hasActive) { statusLabel = '⏳ In Progress'; statusColor = 'var(--warning)'; }
+                            else if (dbSt === 'failed') { statusLabel = '❌ Failed'; statusColor = 'var(--danger)'; }
+                            else { statusLabel = '⏸ Pending Approval'; statusColor = 'var(--text-secondary)'; }
+                            return `<div style="font-size:12px; margin-top:6px;"><span class="inv-engine-status" style="font-weight:700; color:${statusColor}">${statusLabel}</span></div>`;
+                        })() : ''}
                     </div>
                     <div class="card" style="background: linear-gradient(135deg, rgba(255, 165, 2, 0.1) 0%, rgba(255, 165, 2, 0.05) 100%); border-color: rgba(255, 165, 2, 0.2);">
                         <div style="font-size: 32px; margin-bottom: 12px;">💳</div>
@@ -159,7 +167,14 @@ function renderWallet() {
                     <div style="font-size:28px;">💸</div>
                     <div style="flex:1;">
                         <div style="font-size:13px; color:var(--text-secondary); margin-bottom:4px;">
-                            ${hasCompleted ? 'Investment complete — Full capital + profit available' : hasActive ? 'Investment active — 20% available for early withdrawal' : 'No active investment'}
+                            ${(() => {
+                                const dbSt = String(((APP.currentUser && APP.currentUser._dbInvestment) || {}).status || 'inactive').toLowerCase();
+                                if (hasCompleted) return 'Investment complete — Full capital + profit available';
+                                if (dbSt === 'pending') return 'Investment pending approval — Awaiting admin review';
+                                if (dbSt === 'failed') return 'Investment declined — No funds available';
+                                if (hasActive || dbSt === 'approved' || dbSt === 'active') return 'Investment active — 20% available for early withdrawal';
+                                return 'No active investment';
+                            })()}
                         </div>
                         <div style="font-size:22px; font-weight:800; color:var(--success);" id="walletWithdrawableAmt">${formatCurrency(wAmt)}</div>
                     </div>
@@ -518,6 +533,68 @@ function renderAdmin() {
     const content = `
         <h1 style="font-size: 32px; font-weight: 800; margin-bottom: 8px;">Admin Dashboard</h1>
         <p style="color: var(--text-secondary); font-size: 16px; margin-bottom: 32px;">Platform management and analytics</p>
+
+        ${typeof isSuperAdmin === 'function' && isSuperAdmin() ? `
+        <!-- ====== PENDING INVESTMENT APPROVALS (NEW) ====== -->
+        <div class="card" style="margin-bottom: 32px; border-color: rgba(255,165,2,0.4);">
+            <div style="display:flex; justify-content: space-between; align-items:center; margin-bottom: 16px;">
+                <h3 style="font-size: 20px; font-weight: 700;">⏳ Pending Investment Approvals</h3>
+                <div class="badge badge-warning">Super Admin Only</div>
+            </div>
+            ${(() => {
+                const pendingUsers = (window.__ADMIN_USERS_CACHE || []).filter(function(u) {
+                    return u && u.investment && String(u.investment.status || '').toLowerCase() === 'pending';
+                });
+                if (pendingUsers.length === 0) {
+                    return `<div style="text-align:center; padding: 32px; color: var(--text-secondary);"><div style="font-size:32px; margin-bottom:8px;">✅</div>No pending investment approvals</div>`;
+                }
+                return `
+                    <div style="overflow-x:auto;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>User Name</th>
+                                    <th>Email</th>
+                                    <th>Investment Amount</th>
+                                    <th>Plan</th>
+                                    <th>Date Submitted</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${pendingUsers.map(function(u) {
+                                    const inv = u.investment || {};
+                                    const submittedAt = inv.createdAt ? formatDateTime(inv.createdAt) : 'N/A';
+                                    const planName = inv.plan || 'N/A';
+                                    const amount   = Number(inv.amount || 0);
+                                    return `
+                                        <tr>
+                                            <td style="font-weight:600;">${u.name || '-'}</td>
+                                            <td style="color:var(--text-secondary); font-size:13px;">${u.email || '-'}</td>
+                                            <td style="font-weight:700; color:var(--accent);">${formatCurrency(amount)}</td>
+                                            <td>${planName}</td>
+                                            <td style="color:var(--text-secondary);">${submittedAt}</td>
+                                            <td>
+                                                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                                    <button class="btn btn-success" style="padding:6px 14px; font-size:13px;" onclick="adminApproveInvestment_v2('${u.id}')">
+                                                        ✅ Approve
+                                                    </button>
+                                                    <button class="btn btn-danger" style="padding:6px 14px; font-size:13px;" onclick="adminDeclineInvestment('${u.id}')">
+                                                        ❌ Decline
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    `;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            })()}
+        </div>
+        <!-- ====== END PENDING INVESTMENT APPROVALS ====== -->
+        ` : ''}
         
         ${typeof isSuperAdmin === 'function' && isSuperAdmin() ? `
         <!-- Pending Investment Payments -->
@@ -1415,3 +1492,115 @@ window.adminApproveInvestment = async function(userId) {
     }
 };
 window.adminApproveInvestment = window.adminApproveInvestment;
+
+// ===================== ADMIN: APPROVE PENDING INVESTMENT (New Approval Flow) =====================
+// Called from the "Pending Investment Approvals" section.
+// Sets investment.status = 'approved', approved = true, startTime = now.
+// Only ekwuemevictor39@gmail.com (super_admin) can call this.
+window.adminApproveInvestment_v2 = async function(userId) {
+    if (!(typeof isSuperAdmin === 'function' && isSuperAdmin())) {
+        showToast('Super Admin permission required', 'error');
+        return;
+    }
+
+    const row = (window.__ADMIN_USERS_CACHE || []).find(function(u) {
+        return u && String(u.id) === String(userId);
+    });
+    if (!row) {
+        showToast('User not found in cache — try refreshing', 'error');
+        return;
+    }
+
+    const inv    = row.investment || {};
+    const amount = Number(inv.amount || 0);
+
+    if (amount <= 0) {
+        showToast('No investment amount found for this user.', 'error');
+        return;
+    }
+
+    if (String(inv.status || '').toLowerCase() !== 'pending') {
+        showToast('Investment is not in pending status.', 'info');
+        return;
+    }
+
+    const now = Date.now();
+    const approvedInvestment = Object.assign({}, inv, {
+        status:    'approved',
+        approved:  true,
+        declined:  false,
+        startTime: now,
+        profit:    0,
+        completed: false
+    });
+
+    try {
+        await window.sbUpdateUserById(userId, { investment: approvedInvestment });
+        showToast('\u2705 Investment approved for ' + (row.name || row.email), 'success');
+
+        // ---- Referral bonus: 20% to referrer's wallet.balance ----
+        const refBy = inv.referredBy || (row.wallet && row.wallet.referredBy) || null;
+        if (refBy && window.sbFetchAllUsers && window.normalizeEmail) {
+            try {
+                const allUsers = await window.sbFetchAllUsers();
+                const referrer = (allUsers || []).find(function(u) {
+                    return u && window.normalizeEmail(u.email) === window.normalizeEmail(refBy);
+                });
+                if (referrer) {
+                    const refBonus   = amount * 0.20;
+                    const curBal     = Number((referrer.wallet && referrer.wallet.balance) || 0);
+                    const updWallet  = Object.assign({}, (referrer.wallet || {}), { balance: curBal + refBonus });
+                    await window.sbUpdateUserById(referrer.id, { wallet: updWallet });
+                    showToast('Referral bonus of ' + formatCurrency(refBonus) + ' added to referrer', 'info');
+                }
+            } catch(e) { /* ignore referral bonus failure */ }
+        }
+
+        // Reload admin users cache + re-render
+        if (typeof adminEnsureUsersLoaded === 'function') await adminEnsureUsersLoaded();
+    } catch (err) {
+        showToast('Failed to approve: ' + ((err && err.message) || 'Unknown error'), 'error');
+    }
+};
+
+// ===================== ADMIN: DECLINE PENDING INVESTMENT (New Approval Flow) =====================
+// Sets investment.status = 'failed', declined = true, approved = false.
+// Only ekwuemevictor39@gmail.com (super_admin) can call this.
+window.adminDeclineInvestment = async function(userId) {
+    if (!(typeof isSuperAdmin === 'function' && isSuperAdmin())) {
+        showToast('Super Admin permission required', 'error');
+        return;
+    }
+
+    const row = (window.__ADMIN_USERS_CACHE || []).find(function(u) {
+        return u && String(u.id) === String(userId);
+    });
+    if (!row) {
+        showToast('User not found in cache — try refreshing', 'error');
+        return;
+    }
+
+    const inv = row.investment || {};
+    if (String(inv.status || '').toLowerCase() !== 'pending') {
+        showToast('Investment is not in pending status.', 'info');
+        return;
+    }
+
+    const declinedInvestment = Object.assign({}, inv, {
+        status:    'failed',
+        approved:  false,
+        declined:  true,
+        startTime: null,
+        profit:    0,
+        completed: false
+    });
+
+    try {
+        await window.sbUpdateUserById(userId, { investment: declinedInvestment });
+        showToast('\u274c Investment declined for ' + (row.name || row.email), 'success');
+        if (typeof adminEnsureUsersLoaded === 'function') await adminEnsureUsersLoaded();
+    } catch (err) {
+        showToast('Failed to decline: ' + ((err && err.message) || 'Unknown error'), 'error');
+    }
+};
+// ===================== END NEW APPROVAL FUNCTIONS =====================
