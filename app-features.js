@@ -18,8 +18,9 @@ function tickGrowthEngine() {
     var amount    = Number(inv.amount    || 0);
     var startTime = Number(inv.startTime || 0);
 
-    // Only run when admin has approved (status === 'active' and startTime is set)
-    if (status !== 'active' || amount <= 0 || startTime <= 0) return;
+    // Only run when admin has approved (status === 'approved' or legacy 'active', and startTime is set)
+    var isRunnable = (status === 'approved' || status === 'active');
+    if (!isRunnable || amount <= 0 || startTime <= 0) return;
     if (inv.completed) return;
 
     var TOTAL_MINUTES = 10080; // 7 days × 24 h × 60 min
@@ -35,14 +36,18 @@ function tickGrowthEngine() {
     var isCompleted = (elapsedMinutes >= TOTAL_MINUTES);
     if (isCompleted) newProfit = maxProfit;
 
+    // Status to write back: completed > approved (keep 'approved' until full completion)
+    var newStatus = isCompleted ? 'completed' : status; // preserve 'approved'/'active'
+
     // ---- Update in-memory immediately (UI sees latest values) ----
     if (APP.currentUser.investment) {
         APP.currentUser.investment.profit    = newProfit;
-        APP.currentUser.investment.status    = isCompleted ? 'completed' : 'active';
+        APP.currentUser.investment.status    = newStatus;
         APP.currentUser.investment.completed = isCompleted;
     }
     if (APP.currentUser._dbInvestment) {
         APP.currentUser._dbInvestment.profit    = newProfit;
+        APP.currentUser._dbInvestment.status    = newStatus;
         APP.currentUser._dbInvestment.completed = isCompleted;
     }
     APP.currentUser.investmentWallet = amount + newProfit;
@@ -74,7 +79,7 @@ function tickGrowthEngine() {
         _growthLastSyncTime = now;
         var updatedInv = Object.assign({}, inv, {
             profit:    newProfit,
-            status:    isCompleted ? 'completed' : 'active',
+            status:    newStatus,
             completed: isCompleted
         });
         window.sbUpdateUserById(APP.currentUser.id, { investment: updatedInv })
@@ -115,7 +120,9 @@ window.maybeStartGrowthEngine = function() {
     var status    = (inv && inv.status) || 'inactive';
     var completed = !!(inv && inv.completed);
 
-    if (amount > 0 && startTime > 0 && status === 'active' && !completed) {
+    // Growth runs ONLY when status is 'approved' or legacy 'active' (never 'pending' or 'failed')
+    var canRun = (status === 'approved' || status === 'active');
+    if (amount > 0 && startTime > 0 && canRun && !completed) {
         startGrowthEngine();
     } else {
         stopGrowthEngine();
