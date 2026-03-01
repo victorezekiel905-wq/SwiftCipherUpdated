@@ -59,6 +59,19 @@
     return true;
   };
 
+  // ---- Fetch all users whose investment.status = 'pending' (approval queue) ----
+  window.sbFetchPendingInvestments = async function () {
+    const { data, error } = await window.sb
+      .from('Users')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    // Filter client-side because Supabase JSONB equality queries require RPC or generated columns
+    return (data || []).filter(function (u) {
+      return u && u.investment && String(u.investment.status || '').toLowerCase() === 'pending';
+    });
+  };
+
   // Attempt to upsert the super admin once (will only work if your RLS/policies allow it).
   // You were instructed to insert this record manually in Supabase, so failure here is OK.
   window.sbEnsureSuperAdminRecord = async function () {
