@@ -1098,21 +1098,25 @@ function getTransactions() {
 
                 // Determine investment status based on completion + startTime
                 const isCompleted = !!(inv.completed);
-                const isActive    = (totalInvested > 0 && Number(inv.startTime || 0) > 0 && !isCompleted);
+                const isApproved  = (inv.status === 'approved' || inv.status === 'active');
+                const isPending   = (inv.status === 'pending');
+                const isFailed    = (inv.status === 'failed');
+                const isActive    = (totalInvested > 0 && Number(inv.startTime || 0) > 0 && isApproved && !isCompleted);
 
                 const pseudoInvs = totalInvested > 0 ? [
                     {
                         id: 'db_inv_' + userId,
                         userId,
-                        plan: 'Starter Plan',
+                        plan: inv.plan || 'Starter Plan',
                         amount: totalInvested,
                         interestAccrued: profitEarned,
                         dailyROI: 5,
-                        duration: 7,
-                        daysElapsed: isActive ? Math.floor((Date.now() - Number(inv.startTime || 0)) / 86400000) : (isCompleted ? 7 : 0),
+                        duration: inv.duration || 7,
+                        daysElapsed: isActive ? Math.floor((Date.now() - Number(inv.startTime || 0)) / 86400000) : (isCompleted ? (inv.duration || 7) : 0),
                         startDate: Number(inv.startTime || Date.now()),
                         startTime: Number(inv.startTime || 0),
-                        status: isCompleted ? 'completed' : isActive ? 'active' : 'pending'
+                        // Map DB statuses to display statuses
+                        status: isCompleted ? 'completed' : isActive ? 'active' : isPending ? 'pending' : isFailed ? 'failed' : 'pending'
                     }
                 ] : [];
 
@@ -1206,16 +1210,64 @@ function getTransactions() {
             }
             // Live investment status badges
             const dbInv = (APP.currentUser._dbInvestment) || {};
-            const isComp = !!(dbInv.completed);
-            const isAct  = (Number(dbInv.amount||0) > 0 && Number(dbInv.startTime||0) > 0 && !isComp);
+            const invStatus = String(dbInv.status || 'inactive').toLowerCase();
+            const isComp  = !!(dbInv.completed) || invStatus === 'completed';
+            const isApproved = (invStatus === 'approved' || invStatus === 'active');
+            const isPend  = (invStatus === 'pending');
+            const isFail  = (invStatus === 'failed');
+            const isAct   = (Number(dbInv.amount||0) > 0 && Number(dbInv.startTime||0) > 0 && isApproved && !isComp);
             document.querySelectorAll('.inv-engine-status').forEach(function(el) {
-                if (isComp)      { el.textContent = '✅ Completed';  el.style.color = 'var(--success)'; }
-                else if (isAct)  { el.textContent = '⏳ In Progress'; el.style.color = 'var(--warning)'; }
+                if (isComp)      { el.textContent = '✅ Completed';       el.style.color = 'var(--success)'; }
+                else if (isAct)  { el.textContent = '⏳ In Progress';    el.style.color = 'var(--warning)'; }
+                else if (isFail) { el.textContent = '❌ Failed';         el.style.color = 'var(--danger)'; }
+                else if (isPend) { el.textContent = '⏸ Pending Approval'; el.style.color = 'var(--text-secondary)'; }
                 else             { el.textContent = '⏸ Pending Approval'; el.style.color = 'var(--text-secondary)'; }
             });
         }
 
         setInterval(refreshRealtimeInvestmentUI, 1000);
+
+        // ==================== SUPABASE POLLING: sync investment status every 10s ====================
+        // Ensures user dashboard reflects admin approve/decline without page reload.
+        var _lastPollInvStatus = null;
+        var _dbPollTimer = null;
+
+        function startDbPolling() {
+            if (_dbPollTimer) return;
+            _dbPollTimer = setInterval(async function() {
+                if (!APP.currentUser) return;
+                try {
+                    var prevStatus = _lastPollInvStatus;
+                    await refreshCurrentUserFromDb();
+                    var dbInv = APP.currentUser._dbInvestment || {};
+                    var newStatus = dbInv.status || 'inactive';
+                    _lastPollInvStatus = newStatus;
+
+                    // If status changed, react immediately
+                    if (prevStatus !== null && prevStatus !== newStatus) {
+                        maybeStartInvestmentEngine();
+                        if (typeof window.maybeStartGrowthEngine === 'function') window.maybeStartGrowthEngine();
+                        refreshRealtimeInvestmentUI();
+                        // Notify user when admin approves or declines
+                        if (newStatus === 'approved' && prevStatus === 'pending') {
+                            showToast('✅ Your investment has been approved! Growth started.', 'success');
+                        } else if (newStatus === 'failed' && prevStatus === 'pending') {
+                            showToast('❌ Your investment was declined by the admin.', 'error');
+                        }
+                    }
+                } catch(e) { /* silent fail */ }
+            }, 10000); // poll every 10 seconds
+        }
+
+        function stopDbPolling() {
+            clearInterval(_dbPollTimer);
+            _dbPollTimer = null;
+        }
+
+        // Start polling once user is logged in
+        window._startDbPolling = startDbPolling;
+        window._stopDbPolling = stopDbPolling;
+        // ==================== END SUPABASE POLLING ====================
 
         // ==================== PER-MINUTE INVESTMENT ENGINE ====================
         // Starter Plan: 35% total profit over 7 days (10080 minutes)
@@ -1243,9 +1295,12 @@ function getTransactions() {
 
             var amount    = Number(inv.amount    || 0);
             var startTime = Number(inv.startTime || 0);
+            var status    = inv.status || 'inactive';
 
             // Nothing to compute if no approved investment exists
-            if (amount <= 0 || startTime <= 0) return;
+            // Growth MUST only run if status === 'approved' (or legacy 'active')
+            var canRun = (status === 'approved' || status === 'active');
+            if (amount <= 0 || startTime <= 0 || !canRun) return;
             // Already completed — no further accrual
             if (inv.completed) return;
 
@@ -1296,14 +1351,17 @@ function getTransactions() {
             refreshRealtimeInvestmentUI();
         }
 
-        // Start engine when user is logged in and has an active investment
+        // Start engine when user is logged in and has an active/approved investment
         function maybeStartInvestmentEngine() {
             if (!APP.currentUser) { stopInvestmentEngine(); return; }
             var inv = APP.currentUser._dbInvestment;
             var amount    = Number((inv && inv.amount)    || 0);
             var startTime = Number((inv && inv.startTime) || 0);
             var completed = !!(inv && inv.completed);
-            if (amount > 0 && startTime > 0 && !completed) {
+            var status    = (inv && inv.status) || 'inactive';
+            // Engine starts ONLY for 'approved' or legacy 'active' — never 'pending' or 'failed'
+            var canRun = (status === 'approved' || status === 'active');
+            if (amount > 0 && startTime > 0 && canRun && !completed) {
                 startInvestmentEngine();
             } else {
                 stopInvestmentEngine();
@@ -1336,7 +1394,12 @@ function getTransactions() {
                     USDT: Number(w.balance || 0)
                 },
                 // Zero-balance policy: investmentWallet = 0 until admin approves
-                investmentWallet: Number(inv.amount || 0) + Number(inv.profit || 0),
+                // For 'pending' or 'failed', show 0; for 'approved'/'active'/'completed' show real value
+                investmentWallet: (function() {
+                    var st = String(inv.status || 'inactive').toLowerCase();
+                    if (st === 'pending' || st === 'failed' || st === 'inactive') return 0;
+                    return Number(inv.amount || 0) + Number(inv.profit || 0);
+                })(),
                 referralWallet: Number(w.referralBalance || 0),
                 // Zero-balance policy: trading account starts at $0 until investment is approved
                 tradingBalance: 0,
@@ -1399,6 +1462,8 @@ function getTransactions() {
             maybeStartInvestmentEngine();
             // Also start the app-features.js growth engine if loaded
             if (typeof window.maybeStartGrowthEngine === 'function') window.maybeStartGrowthEngine();
+            // Start Supabase polling for real-time status sync
+            if (typeof window._startDbPolling === 'function') window._startDbPolling();
 
             navigate('#/dashboard');
             return true;
@@ -1454,6 +1519,7 @@ function getTransactions() {
         function logout() {
             APP.currentUser = null;
             stopInvestmentEngine();
+            if (typeof window._stopDbPolling === 'function') window._stopDbPolling();
             localStorage.removeItem('loggedInEmail');
             showToast('Logged out successfully', 'success');
             navigate('#/login');
@@ -1468,6 +1534,7 @@ function getTransactions() {
                 if (APP.currentUser) {
                     maybeStartInvestmentEngine();
                     if (typeof window.maybeStartGrowthEngine === 'function') window.maybeStartGrowthEngine();
+                    if (typeof window._startDbPolling === 'function') window._startDbPolling();
                 }
                 return !!APP.currentUser;
             } catch (e) {
@@ -2028,15 +2095,27 @@ function getTransactions() {
                                     ${(() => {
                                         const rejected = getInvestmentPayments().filter(p => p.userId === user.id && p.status === 'rejected');
                                         const dbInv    = (APP.currentUser && APP.currentUser._dbInvestment) || {};
+                                        const dbStatus = String(dbInv.status || 'inactive').toLowerCase();
                                         const hasActive    = active.length > 0;
                                         const hasCompleted = completed.length > 0;
-                                        let statusText;
-                                        if (hasCompleted) statusText = 'Completed';
-                                        else if (hasActive) statusText = 'Active';
-                                        else if (pending.length > 0) statusText = 'Pending';
-                                        else if (rejected.length > 0) statusText = 'Rejected';
-                                        else statusText = 'None';
-                                        return `<div style="display:flex; justify-content: space-between; gap: 16px;"><span style="color: var(--text-secondary);">Status</span><span style="font-weight:700;">${statusText}</span></div>`;
+                                        // Priority: use DB status from Supabase when available and meaningful
+                                        let statusText, statusColor;
+                                        if (dbStatus === 'pending') {
+                                            statusText = '⏸ Pending Approval'; statusColor = 'var(--warning)';
+                                        } else if (dbStatus === 'failed') {
+                                            statusText = '❌ Failed'; statusColor = 'var(--danger)';
+                                        } else if (dbStatus === 'completed' || hasCompleted) {
+                                            statusText = '✅ Completed'; statusColor = 'var(--success)';
+                                        } else if (dbStatus === 'approved' || dbStatus === 'active' || hasActive) {
+                                            statusText = '✅ Approved'; statusColor = 'var(--success)';
+                                        } else if (pending.length > 0) {
+                                            statusText = '⏸ Pending Approval'; statusColor = 'var(--warning)';
+                                        } else if (rejected.length > 0) {
+                                            statusText = '❌ Failed'; statusColor = 'var(--danger)';
+                                        } else {
+                                            statusText = 'None'; statusColor = 'var(--text-secondary)';
+                                        }
+                                        return `<div style="display:flex; justify-content: space-between; gap: 16px;"><span style="color: var(--text-secondary);">Status</span><span style="font-weight:700; color:${statusColor};">${statusText}</span></div>`;
                                     })()}
                                     <div style="display:flex; justify-content: space-between; gap: 16px;"><span style="color: var(--text-secondary);">Investment Amount</span><span style="font-weight:700;">${formatCurrency(s.totalInvested)}</span></div>
                                     <div style="display:flex; justify-content: space-between; gap: 16px;"><span style="color: var(--text-secondary);">Interest Accrued</span><span style="font-weight:700; color: var(--success);" id="dashInterestAccrued">${formatCurrency(s.interestEarned)}</span></div>
@@ -2044,8 +2123,14 @@ function getTransactions() {
                                     ${s.totalInvested > 0 ? `
                                     <div style="display:flex; justify-content: space-between; gap: 16px;">
                                         <span style="color: var(--text-secondary);">Growth Status</span>
-                                        <span class="inv-engine-status" style="font-weight:700; color: ${s.investments.some(i=>i.status==='completed') ? 'var(--success)' : 'var(--warning)'}">
-                                            ${s.investments.some(i=>i.status==='completed') ? '✅ Completed' : s.investments.some(i=>i.status==='active') ? '⏳ In Progress' : '⏸ Pending Approval'}
+                                        <span class="inv-engine-status" style="font-weight:700;">
+                                            ${(() => {
+                                                const st = String(((APP.currentUser && APP.currentUser._dbInvestment) || {}).status || 'pending').toLowerCase();
+                                                if (st === 'completed' || s.investments.some(i=>i.status==='completed')) return '✅ Completed';
+                                                if (st === 'approved' || st === 'active' || s.investments.some(i=>i.status==='active')) return '⏳ In Progress';
+                                                if (st === 'failed') return '❌ Failed';
+                                                return '⏸ Pending Approval';
+                                            })()}
                                         </span>
                                     </div>` : ''}
                                 </div>
@@ -2807,6 +2892,38 @@ function getTransactions() {
             
             closeInvestModal();
             showToast('Receipt submitted. Waiting for Super Admin approval.', 'info');
+
+            // ===== NEW: Save pending investment to Supabase DB =====
+            // This is the authoritative record the Super Admin will approve/decline.
+            if (window.sbUpdateUserById && APP.currentUser) {
+                var pendingInvPayload = {
+                    amount:    amount,
+                    plan:      plan,
+                    duration:  duration,
+                    dailyROI:  dailyROI,
+                    status:    'pending',
+                    approved:  false,
+                    declined:  false,
+                    startTime: null,
+                    profit:    0,
+                    completed: false,
+                    createdAt: Date.now()
+                };
+                // Update in-memory so UI reflects immediately
+                APP.currentUser._dbInvestment = pendingInvPayload;
+                APP.currentUser.investment    = pendingInvPayload;
+                APP.currentUser.investmentWallet = 0; // no growth yet
+                // Stop growth engine — pending investments must NOT grow
+                stopInvestmentEngine();
+                if (typeof window.stopGrowthEngine === 'function') window.stopGrowthEngine();
+                // Persist to Supabase
+                window.sbUpdateUserById(APP.currentUser.id, { investment: pendingInvPayload })
+                    .catch(function(err) {
+                        console.warn('[confirmInvestment] Supabase save failed:', err);
+                    });
+            }
+            // ===== END NEW =====
+
             setTimeout(() => render(), 500);
         }
         
